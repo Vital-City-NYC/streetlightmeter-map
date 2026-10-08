@@ -372,6 +372,15 @@ h1 {
     </div>
 
     <div class="sb-section">
+      <div class="sb-h">App</div>
+      <div class="tag-row" id="source-filters">
+        <button class="tag active" data-source="all">Both</button>
+        <button class="tag" data-source="web">Web app</button>
+        <button class="tag" data-source="ios">iPhone app</button>
+      </div>
+    </div>
+
+    <div class="sb-section">
       <div class="sb-h">Time range</div>
       <div class="tag-row" id="time-filters">
         <button class="tag" data-days="7">7d</button>
@@ -418,8 +427,13 @@ const LABEL_COLOR = {
   'Well Lit': '#4fbe5a'
 };
 
+// Which app took the reading, as the readings API records it.
+const SOURCE_TEXT = { 'web': 'Web app', 'ios': 'iPhone app' };
+function sourceText(source) { return SOURCE_TEXT[source] || 'App not recorded'; }
+
 let state = {
   label: 'all',
+  source: 'all',
   days: 365,
   features: []
 };
@@ -490,6 +504,7 @@ async function loadReadings() {
   try {
     const qs = new URLSearchParams({ days: state.days, limit: 10000 });
     if (state.label !== 'all') qs.set('label', state.label);
+    if (state.source !== 'all') qs.set('source', state.source);
     const res = await fetch(`${API_BASE}/readings/geojson?${qs}`);
     const data = await res.json();
     state.features = data.features || [];
@@ -556,7 +571,7 @@ function renderSidebar() {
       </div>
       <div class="li-body">
         <div class="li-addr">${escapeHtml(p.address || 'Unknown location')}</div>
-        <div class="li-meta">${p.label} · ${tStr}</div>
+        <div class="li-meta">${p.label} · ${sourceText(p.source)} · ${tStr}</div>
         ${p.reported ? '<div class="li-reported">✓ Reported to 311</div>' : ''}
       </div>
     </div>`;
@@ -590,6 +605,7 @@ function showPopup(f) {
       <div class="pop-lux">${luxStr}<span class="pop-lux-u">lux</span></div>
       <div class="pop-addr">${escapeHtml(p.address || 'Unknown location')}</div>
       <div class="pop-meta">${tStr}</div>
+      <div class="pop-meta">${sourceText(p.source)}</div>
       ${p.reported ? '<div class="pop-rep">✓ Reported to NYC 311</div>' : ''}
     `)
     .addTo(map);
@@ -615,11 +631,13 @@ const BAND_RULE = {
 const BAND_TEXT = { 'Dark': 'Dark', 'Dim': 'Dim', 'Adequate': 'Adequate', 'Well Lit': 'Well lit' };
 function bandText(label) { return BAND_TEXT[label] || label; }
 
-// "2026-08-11 19:28:44" parses in Chrome but not Safari; the T form works in both
-// and carries the same local-time meaning.
+// The API stores times in UTC ("2026-08-11 19:28:44", from D1's datetime('now')).
+// The T-and-Z form parses in both Chrome and Safari and displays in local time.
 function parseTs(s) {
   if (!s) return null;
-  const d = new Date(String(s).replace(' ', 'T'));
+  let iso = String(s).replace(' ', 'T');
+  if (!/(Z|[+-]\d\d:?\d\d)$/.test(iso)) iso += 'Z';
+  const d = new Date(iso);
   return isNaN(d) ? null : d;
 }
 function fmtDate(d) {
@@ -676,6 +694,7 @@ function buildReport(features) {
       address: p.address || 'Location not recorded',
       problemType: p.problemType || '',
       reported: !!p.reported,
+      source: p.source,
       date: parseTs(p.createdAt),
       lat, lng
     };
@@ -702,6 +721,10 @@ function buildReport(features) {
   L.push(`Darkest: ${lux1(darkest.lux)} lux at ${darkest.address} (${fmtDate(darkest.date)}).`);
   L.push(`Brightest: ${lux1(brightest.lux)} lux at ${brightest.address} (${fmtDate(brightest.date)}).`);
   L.push(`Marked reported to New York City 311: ${reportedN} of ${total}.`);
+  const bySource = ['web', 'ios', undefined]
+    .map(src => [src, rows.filter(r => SOURCE_TEXT[src] ? r.source === src : !SOURCE_TEXT[r.source]).length])
+    .filter(([, n]) => n);
+  L.push('By app: ' + bySource.map(([src, n]) => `${sourceText(src)} ${n}`).join(', ') + '.');
   if (stretches) L.push(`Walk-survey stretches included: ${stretches}.`);
 
   // By borough
@@ -738,7 +761,7 @@ function buildReport(features) {
   // Full listing
   L.push(head('Every reading, newest first'));
   rows.forEach((r, i) => {
-    L.push(`${i + 1}. ${fmtDateTime(r.date)} · ${lux1(r.lux)} lux, ${bandText(r.label)} · ${r.address} · ${r.lat.toFixed(6)}, ${r.lng.toFixed(6)}` +
+    L.push(`${i + 1}. ${fmtDateTime(r.date)} · ${lux1(r.lux)} lux, ${bandText(r.label)} · ${sourceText(r.source)} · ${r.address} · ${r.lat.toFixed(6)}, ${r.lng.toFixed(6)}` +
       (r.reported ? ' · reported to 311' : ''));
   });
 
@@ -748,7 +771,9 @@ function buildReport(features) {
   L.push('Lux figures are estimates measured through a phone camera, not a calibrated photometer. No reading here has been checked against one.');
   L.push('Readings are crowdsourced, so they show where somebody chose to measure, not where New York City is darkest. Coverage is uneven by design.');
   L.push('Walk-survey entries report the darkest sample along a walked stretch, not a single point.');
-  L.push('Times are as recorded by the readings API.');
+  L.push('The two apps measure differently. The web app estimates lux from the brightness of camera pixels through a fitted curve. The iPhone app computes it from the exposure settings the camera reports. Compare readings across apps with care.');
+  L.push('Readings submitted before October 8, 2026, were assigned an app from the device signature the readings API stored with each one.');
+  L.push('Times are recorded by the readings API in UTC and shown here in this computer\'s time zone.');
   return L.join('\n');
 }
 
@@ -844,6 +869,14 @@ document.getElementById('label-filters').addEventListener('click', e => {
   document.querySelectorAll('#label-filters .tag').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   state.label = btn.dataset.label;
+  loadReadings();
+});
+document.getElementById('source-filters').addEventListener('click', e => {
+  const btn = e.target.closest('.tag');
+  if (!btn) return;
+  document.querySelectorAll('#source-filters .tag').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  state.source = btn.dataset.source;
   loadReadings();
 });
 document.getElementById('time-filters').addEventListener('click', e => {
