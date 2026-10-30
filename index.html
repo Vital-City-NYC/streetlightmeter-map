@@ -448,7 +448,6 @@ h1 {
       <div class="sb-h">App</div>
       <div class="tag-row" id="source-filters">
         <button class="tag active" data-source="all">All</button>
-        <button class="tag" data-source="web">Web app</button>
         <button class="tag" data-source="ios">iPhone app</button>
         <button class="tag" data-source="android">Android app</button>
       </div>
@@ -527,7 +526,8 @@ let state = {
   features: [],      // spot readings after the band filter, as drawn
   allFeatures: [],   // every spot reading in the app and time range
   walks: [],
-  tab: 'tracker'
+  tab: 'tracker',
+  webHidden: 0
 };
 
 mapboxgl.accessToken = 'pk.' + 'eyJ1IjoieHIyMDA2IiwiYSI6ImNtaTdkdHpyMjA1eTEya3EwbjVkeHh0OHcifQ' + '.63Tlvydk2jod3GrgjFyAKw';
@@ -626,7 +626,12 @@ async function loadReadings() {
     if (state.source !== 'all') qs.set('source', state.source);
     const res = await fetch(`${API_BASE}/readings/geojson?${qs}`);
     const data = await res.json();
-    state.allFeatures = data.features || [];
+    // The web version was retired on Oct. 30, 2026. It estimated light from how bright
+    // the camera's picture looked, without the exposure settings the apps use, and read
+    // far less reliably, so its readings stay in the database but off the map.
+    const all = data.features || [];
+    state.allFeatures = all.filter(f => f.properties.source !== 'web');
+    state.webHidden = all.length - state.allFeatures.length;
     state.features = state.label === 'all'
       ? state.allFeatures
       : state.allFeatures.filter(f => f.properties.label === state.label);
@@ -821,7 +826,7 @@ async function fetchAllReadings() {
   if (!res.ok) throw new Error(`the readings API returned ${res.status}`);
   const data = await res.json();
   if (!data || !Array.isArray(data.features)) throw new Error('the readings API returned an unexpected shape');
-  return data.features;
+  return data.features.filter(f => (f.properties || {}).source !== 'web');
 }
 
 function buildReport(features) {
@@ -875,7 +880,7 @@ function buildReport(features) {
   L.push(`Darkest: ${lux1(darkest.lux)} lux at ${darkest.address} (${fmtDate(darkest.date)}).`);
   L.push(`Brightest: ${lux1(brightest.lux)} lux at ${brightest.address} (${fmtDate(brightest.date)}).`);
   L.push(`Marked reported to New York City 311: ${reportedN} of ${total}.`);
-  const bySource = ['web', 'ios', undefined]
+  const bySource = ['ios', 'android', undefined]
     .map(src => [src, rows.filter(r => SOURCE_TEXT[src] ? r.source === src : !SOURCE_TEXT[r.source]).length])
     .filter(([, n]) => n);
   L.push('By app: ' + bySource.map(([src, n]) => `${sourceText(src)} ${n}`).join(', ') + '.');
@@ -925,7 +930,8 @@ function buildReport(features) {
   L.push('Lux figures are estimates measured through a phone camera, not a calibrated photometer. No reading here has been checked against one.');
   L.push('Readings are crowdsourced, so they show where somebody chose to measure, not where New York City is darkest. Coverage is uneven by design.');
   L.push('Walk-survey entries report the darkest sample along a walked stretch, not a single point.');
-  L.push('The two apps measure differently. The web app estimates lux from the brightness of camera pixels through a fitted curve. The iPhone app computes it from the exposure settings the camera reports. Compare readings across apps with care.');
+  L.push('Readings from the web version are left out. It was retired on October 30, 2026: it estimated lux from the brightness of camera pixels through a fitted curve and was far less accurate than the iPhone and Android apps, which compute it from the exposure settings the camera reports.');
+  L.push('Android readings from versions before October 23, 2026, read about half as high as the iPhone; later versions are adjusted to match it.');
   L.push('Readings submitted before October 8, 2026, were assigned an app from the device signature the readings API stored with each one.');
   L.push('Times are recorded by the readings API in UTC and shown here in this computer\'s time zone.');
   return L.join('\n');
@@ -1307,6 +1313,7 @@ function renderTracker() {
     + 'They show where people chose to measure, not every dark block in the city. '
     + 'Lux comes from phone cameras and has not been checked against a calibrated meter. Android readings are adjusted to match the iPhone'
     + (oldN ? `; ${oldN} measurement${oldN === 1 ? '' : 's'} here came from an older Android version that reads about half as high, so places that lean on them may look darker than they are.` : '.')
+    + (state.webHidden ? ` ${state.webHidden} reading${state.webHidden === 1 ? '' : 's'} from the retired web version, which was far less accurate, are left off the map.` : '')
     + ' The band filter above does not apply here; the app and time filters do.</p></div></div>';
 
   el.innerHTML = html;
