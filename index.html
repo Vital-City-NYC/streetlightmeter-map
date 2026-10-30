@@ -152,7 +152,9 @@ h1 {
 }
 
 /* List */
-.list-wrap { flex: 1; overflow-y: auto; }
+/* The whole sidebar scrolls, so the tracker and the list get their full height
+   instead of a sliver under the filters. */
+.list-wrap { flex: 1 0 auto; }
 .list-item {
   padding: 14px 24px;
   border-bottom: 1px solid var(--vc-border);
@@ -194,6 +196,71 @@ h1 {
   color: var(--vc-green);
   font-weight: 600;
 }
+
+/* Tabs: the tracker and the plain list of readings */
+.tabs { display: flex; border-bottom: 1px solid var(--vc-border); }
+.tab-btn {
+  flex: 1;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 13px 8px 11px;
+  background: transparent;
+  color: var(--vc-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.tab-btn.active { color: var(--vc-text); border-bottom-color: var(--vc-chartreuse); }
+
+/* Tracker */
+.tr { padding: 4px 0 8px; }
+.tr-sec { padding: 18px 24px 6px; }
+.tr-h {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--vc-dim);
+  margin-bottom: 8px;
+}
+.tr-lede { font-family: var(--font-serif); font-size: 14px; line-height: 1.55; color: var(--vc-text-2); }
+.tr-lede b { color: var(--vc-text); font-weight: 600; }
+.tr-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 12px 0 8px; gap: 2px; }
+.tr-bar span { display: block; height: 100%; }
+.tr-key { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--vc-text-2); }
+.tr-key i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.tr-note { font-family: var(--font-serif); font-size: 12px; line-height: 1.5; color: var(--vc-dim); margin-top: 6px; }
+.zone {
+  padding: 12px 24px;
+  border-top: 1px solid var(--vc-border);
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  transition: background .12s;
+}
+.zone:hover { background: var(--vc-surface-2); }
+.zone-rank { width: 16px; flex-shrink: 0; font-size: 11px; font-weight: 700; color: var(--vc-dim); padding-top: 2px; }
+.zone-where { font-size: 13px; font-weight: 600; line-height: 1.3; }
+.zone-meta { font-size: 11px; color: var(--vc-dim); margin-top: 3px; line-height: 1.45; }
+.zone-meta b { color: var(--vc-text-2); font-weight: 600; }
+.zone .li-badge { width: 40px; height: 40px; font-size: 13px; }
+.tr-more {
+  margin: 8px 24px 4px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--vc-border);
+  background: transparent;
+  color: var(--vc-text-2);
+  cursor: pointer;
+}
+.tr-empty { font-family: var(--font-serif); font-size: 13px; color: var(--vc-dim); padding: 4px 0 8px; line-height: 1.5; }
 
 /* Report footer */
 .sb-foot {
@@ -398,7 +465,14 @@ h1 {
       </div>
     </div>
 
-    <div class="list-wrap" id="list-wrap">
+    <div class="tabs" id="tabs">
+      <button class="tab-btn active" data-tab="tracker">What it adds up to</button>
+      <button class="tab-btn" data-tab="list">Every reading</button>
+    </div>
+
+    <div class="list-wrap" id="tracker"></div>
+
+    <div class="list-wrap" id="list-wrap" hidden>
       <div class="empty" id="empty-state">
         <div class="empty-ico">💡</div>
         <div class="empty-t">No readings yet</div>
@@ -450,8 +524,10 @@ let state = {
   label: 'all',
   source: 'all',
   days: 365,
-  features: [],
-  walks: []
+  features: [],      // spot readings after the band filter, as drawn
+  allFeatures: [],   // every spot reading in the app and time range
+  walks: [],
+  tab: 'tracker'
 };
 
 mapboxgl.accessToken = 'pk.' + 'eyJ1IjoieHIyMDA2IiwiYSI6ImNtaTdkdHpyMjA1eTEya3EwbjVkeHh0OHcifQ' + '.63Tlvydk2jod3GrgjFyAKw';
@@ -544,14 +620,19 @@ async function loadWalks() {
 async function loadReadings() {
   await loadWalks();
   try {
+    // Fetched without the band filter, which is applied here instead, so the tracker
+    // can always weigh dark readings against lit ones.
     const qs = new URLSearchParams({ days: state.days, limit: 10000 });
-    if (state.label !== 'all') qs.set('label', state.label);
     if (state.source !== 'all') qs.set('source', state.source);
     const res = await fetch(`${API_BASE}/readings/geojson?${qs}`);
     const data = await res.json();
-    state.features = data.features || [];
-    map.getSource('readings').setData(data);
+    state.allFeatures = data.features || [];
+    state.features = state.label === 'all'
+      ? state.allFeatures
+      : state.allFeatures.filter(f => f.properties.label === state.label);
+    map.getSource('readings').setData({ type: 'FeatureCollection', features: state.features });
     renderSidebar();
+    renderTracker();
     if (state.features.length > 0 || state.walks.length > 0) fitToFeatures();
   } catch (e) {
     console.error('loadReadings', e);
@@ -701,7 +782,7 @@ const BAND_RULE = {
   'Well Lit': 'over 30 lux'
 };
 // Sentence case for prose; the API's own values stay untouched in state.
-const BAND_TEXT = { 'Dark': 'Dark', 'Dim': 'Dim', 'Adequate': 'Adequate', 'Well Lit': 'Well lit' };
+const BAND_TEXT = { 'Dark': 'Dark', 'Dim': 'Dim', 'Adequate': 'Adequate', 'Well Lit': 'Well lit', 'Too Bright': 'Too bright' };
 function bandText(label) { return BAND_TEXT[label] || label; }
 
 // The API stores times in UTC ("2026-08-11 19:28:44", from D1's datetime('now')).
@@ -933,6 +1014,319 @@ document.getElementById('copy-report').addEventListener('click', async () => {
     btn.textContent = 'Copy full report';
     showReportModal(text);
   }
+});
+
+/* ───────── Tracker ─────────
+   Turns the dots and lines into places. Every spot reading, and every walk sampled
+   every 5 meters along its route, drops into a grid of cells about 45 meters across.
+   Each cell gets a median light level, weighted by how much of it was measured (a
+   spot reading counts as 10 meters of sidewalk). Neighboring cells in the same band
+   join into one place. Places measured more than once rank first. */
+
+const CELL_LAT = 0.0004;            // about 44 m north to south
+const CELL_LNG = 0.00053;           // about 44 m east to west at New York's latitude
+const SPOT_WEIGHT_M = 10;
+const STEP_M = 5;
+// Android builds before this one read about half as high as the iPhone.
+const FIRST_MATCHED_ANDROID = 29879456;
+
+function metersBetween(a, b) {
+  const kx = 111320 * Math.cos(a[1] * Math.PI / 180);
+  return Math.hypot((b[0] - a[0]) * kx, (b[1] - a[1]) * 111320);
+}
+function bandOf(lux) {
+  if (lux > 150) return 'Too Bright';
+  if (lux <= 5) return 'Dark';
+  if (lux <= 15) return 'Dim';
+  if (lux <= 30) return 'Adequate';
+  return 'Well Lit';
+}
+const BANDS = ['Dark', 'Dim', 'Adequate', 'Well Lit', 'Too Bright'];
+const BAND_RANK = { 'Dark': 0, 'Dim': 1, 'Adequate': 2, 'Well Lit': 3, 'Too Bright': 4 };
+function weightedMedian(items) {
+  const s = [...items].sort((a, b) => a.lux - b.lux);
+  const total = s.reduce((t, x) => t + x.w, 0);
+  let acc = 0;
+  for (const x of s) { acc += x.w; if (acc >= total / 2) return x.lux; }
+  return s.length ? s[s.length - 1].lux : null;
+}
+function isOldAndroid(p) {
+  return p.source === 'android' && p.build != null && Number(p.build) < FIRST_MATCHED_ANDROID;
+}
+function feet(m) {
+  const f = m * 3.28084;
+  return f < 1000 ? `${Math.round(f / 10) * 10} feet` : `${(f / 5280).toFixed(1)} miles`;
+}
+function shortDay(d) { return d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''; }
+function dayRange(dates) {
+  const ds = dates.filter(Boolean).sort((a, b) => a - b);
+  if (!ds.length) return '';
+  const a = shortDay(ds[0]), b = shortDay(ds[ds.length - 1]);
+  return a === b ? a : `${a} to ${b}`;
+}
+// "736 East 152nd Street, The Bronx" → "736 East 152nd Street"
+function streetPart(address) {
+  return String(address || '').split(',')[0].trim();
+}
+
+function buildPlaces() {
+  const cells = new Map();
+  const anchors = [];   // addressed points, for naming places
+  const cellOf = (lng, lat) => {
+    const key = Math.round(lat / CELL_LAT) + ':' + Math.round(lng / CELL_LNG);
+    let c = cells.get(key);
+    if (!c) {
+      c = { key, i: Math.round(lat / CELL_LAT), j: Math.round(lng / CELL_LNG), items: [],
+            readings: new Set(), walks: new Set(), dates: [], old: 0, pts: [], byVisit: new Map() };
+      cells.set(key, c);
+    }
+    return c;
+  };
+
+  for (const f of state.allFeatures) {
+    const p = f.properties;
+    const [lng, lat] = f.geometry.coordinates;
+    const c = cellOf(lng, lat);
+    c.items.push({ lux: Number(p.lux), w: SPOT_WEIGHT_M });
+    c.byVisit.set('r' + p.id, [{ lux: Number(p.lux), w: SPOT_WEIGHT_M }]);
+    c.readings.add(p.id);
+    c.dates.push(parseTs(p.createdAt));
+    c.pts.push([lng, lat]);
+    if (isOldAndroid(p)) c.old++;
+    if (p.address) anchors.push({ at: [lng, lat], address: streetPart(p.address) });
+  }
+
+  const walkEnds = new Map();
+  for (const f of state.walks) {
+    const p = f.properties;
+    const coords = f.geometry.coordinates;
+    const when = p.startedAt ? new Date(p.startedAt) : parseTs(p.createdAt);
+    const old = isOldAndroid(p);
+    for (let k = 1; k < coords.length; k++) {
+      const a = coords[k - 1], b = coords[k];
+      const len = metersBetween(a, b);
+      const n = Math.max(1, Math.round(len / STEP_M));
+      for (let s = 0; s < n; s++) {
+        const t = (s + 0.5) / n;
+        const lng = a[0] + (b[0] - a[0]) * t, lat = a[1] + (b[1] - a[1]) * t;
+        const c = cellOf(lng, lat);
+        c.items.push({ lux: Number(p.lux), w: len / n });
+        const v = c.byVisit.get('w' + p.walkId) || [];
+        v.push({ lux: Number(p.lux), w: len / n });
+        c.byVisit.set('w' + p.walkId, v);
+        if (!c.walks.has(p.walkId)) { c.walks.add(p.walkId); c.dates.push(when); if (old) c.old++; }
+        c.pts.push([lng, lat]);
+      }
+    }
+    // The first and last point of each walk carry its start and end addresses.
+    const e = walkEnds.get(p.walkId) || { first: coords[0], last: coords[coords.length - 1], address: p.address };
+    e.last = coords[coords.length - 1];
+    walkEnds.set(p.walkId, e);
+  }
+  for (const e of walkEnds.values()) {
+    const [from, to] = String(e.address || '').split(' to ');
+    if (from) anchors.push({ at: e.first, address: streetPart(from) });
+    if (to) anchors.push({ at: e.last, address: streetPart(to) });
+  }
+
+  for (const c of cells.values()) {
+    c.lux = weightedMedian(c.items);
+    c.band = bandOf(c.lux);
+    c.measured = c.items.reduce((t, x) => t + x.w, 0);
+    // How far apart separate visits to this cell landed: each walk or spot reading's own
+    // median, so a single walk past a lamppost doesn't count as a disagreement.
+    c.visitLux = [...c.byVisit.values()].map(weightedMedian);
+    const ranks = c.visitLux.map(l => BAND_RANK[bandOf(l)]);
+    c.spread = ranks.length > 1 ? Math.max(...ranks) - Math.min(...ranks) : 0;
+  }
+
+  // Join touching cells of the same band into places.
+  const seen = new Set();
+  const places = [];
+  for (const c of cells.values()) {
+    if (seen.has(c.key)) continue;
+    const group = [];
+    const stack = [c];
+    seen.add(c.key);
+    while (stack.length) {
+      const x = stack.pop();
+      group.push(x);
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        const k = (x.i + di) + ':' + (x.j + dj);
+        const y = cells.get(k);
+        if (y && !seen.has(k) && y.band === c.band) { seen.add(k); stack.push(y); }
+      }
+    }
+    places.push(placeFrom(group, anchors));
+  }
+  return { places, cells: [...cells.values()], anchors };
+}
+
+function placeFrom(group, anchors) {
+  const items = group.flatMap(c => c.items);
+  const pts = group.flatMap(c => c.pts);
+  const readings = new Set(group.flatMap(c => [...c.readings]));
+  const walks = new Set(group.flatMap(c => [...c.walks]));
+  let minLng = 999, minLat = 999, maxLng = -999, maxLat = -999;
+  for (const [lng, lat] of pts) {
+    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+  }
+  const center = [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+  const lux = weightedMedian(items);
+  const band = bandOf(lux);
+  const measured = items.reduce((t, x) => t + x.w, 0);
+  const inBand = items.filter(x => bandOf(x.lux) === band).reduce((t, x) => t + x.w, 0);
+  // Name it after the nearest address any reading or walk end recorded, if one is close.
+  let best = null, bestD = Infinity;
+  for (const a of anchors) {
+    const d = metersBetween(center, a.at);
+    if (d < bestD) { bestD = d; best = a; }
+  }
+  const name = best && bestD < 120 ? `Near ${best.address}` : `${center[1].toFixed(4)}, ${center[0].toFixed(4)}`;
+  return {
+    band, lux, measured, name,
+    agree: measured ? inBand / measured : 0,
+    span: Math.max(metersBetween([minLng, minLat], [maxLng, maxLat]), 40),
+    visits: readings.size + walks.size,
+    readings: readings.size, walks: walks.size,
+    dates: group.flatMap(c => c.dates),
+    old: group.reduce((t, c) => t + c.old, 0),
+    bounds: [[minLng, minLat], [maxLng, maxLat]],
+    cells: group
+  };
+}
+
+function visitsText(p) {
+  const parts = [];
+  if (p.walks) parts.push(`${p.walks} walk${p.walks === 1 ? '' : 's'}`);
+  if (p.readings) parts.push(`${p.readings} spot reading${p.readings === 1 ? '' : 's'}`);
+  return parts.join(' and ');
+}
+
+function zoneHtml(p, i, rank, extra) {
+  const color = LABEL_COLOR[p.band] || '#888';
+  return `<div class="zone" data-i="${i}">
+    <div class="zone-rank">${rank}</div>
+    <div class="li-badge" style="background:${color};">${lux1(p.lux)}<div class="li-badge-unit">lux</div></div>
+    <div class="li-body">
+      <div class="zone-where">${escapeHtml(p.name)}</div>
+      <div class="zone-meta">${extra}</div>
+    </div>
+  </div>`;
+}
+
+let trackerZones = [];
+const shownCount = { dark: 8, bright: 5, mixed: 5 };
+
+function renderTracker() {
+  const el = document.getElementById('tracker');
+  if (!state.allFeatures.length && !state.walks.length) {
+    el.innerHTML = '<div class="tr"><div class="tr-sec"><div class="tr-empty">Nothing measured in this time range. Try a longer one.</div></div></div>';
+    return;
+  }
+  const { places, cells, anchors } = buildPlaces();
+  trackerZones = [];
+
+  // How much of the ground measured fell in each band.
+  const byBand = Object.fromEntries(BANDS.map(b => [b, 0]));
+  let walkedM = 0;
+  for (const f of state.walks) {
+    const c = f.geometry.coordinates;
+    for (let k = 1; k < c.length; k++) {
+      const m = metersBetween(c[k - 1], c[k]);
+      byBand[f.properties.label] = (byBand[f.properties.label] || 0) + m;
+      walkedM += m;
+    }
+  }
+  const walkIds = new Set(state.walks.map(f => f.properties.walkId));
+  const nSpots = state.allFeatures.length;
+  const spotBands = Object.fromEntries(BANDS.map(b => [b, state.allFeatures.filter(f => f.properties.label === b).length]));
+  const underM = byBand['Dark'] + byBand['Dim'];
+  const days = state.days >= 3650 ? 'All time' : state.days === 365 ? 'The past year' : `The past ${state.days} days`;
+  const appText = state.source === 'all' ? '' : ` (${sourceText(state.source)} only)`;
+
+  let html = '<div class="tr"><div class="tr-sec"><div class="tr-h">' + days + appText + '</div>';
+  if (walkedM > 0) {
+    html += `<p class="tr-lede"><b>${walkIds.size} walk${walkIds.size === 1 ? '' : 's'}</b> covered ${feet(walkedM)} of sidewalk, and <b>${Math.round(underM / walkedM * 100)}% of it measured under 15 lux</b>, dark or dim. ${nSpots ? `Plus ${nSpots} spot reading${nSpots === 1 ? '' : 's'}, ${spotBands['Dark'] + spotBands['Dim']} of them dark or dim.` : ''}</p>`;
+    html += '<div class="tr-bar">' + BANDS.filter(b => byBand[b] > 0).map(b =>
+      `<span style="width:${byBand[b] / walkedM * 100}%;background:${LABEL_COLOR[b]}" title="${bandText(b)}: ${Math.round(byBand[b] / walkedM * 100)}%"></span>`).join('') + '</div>';
+    html += '<div class="tr-key">' + BANDS.filter(b => byBand[b] > 0).map(b =>
+      `<span><i style="background:${LABEL_COLOR[b]}"></i>${bandText(b)} ${Math.round(byBand[b] / walkedM * 100)}%</span>`).join('') + '</div>';
+    html += '<p class="tr-note">Share of distance walked. Where several people walked the same block, each walk counts.</p>';
+  } else {
+    html += `<p class="tr-lede"><b>${nSpots} spot reading${nSpots === 1 ? '' : 's'}</b>, ${spotBands['Dark']} dark and ${spotBands['Dim']} dim. No walks in this range.</p>`;
+  }
+  html += '</div>';
+
+  // Darkest places, the best-attested first.
+  const dark = places.filter(p => p.band === 'Dark')
+    .sort((a, b) => (b.visits > 1) - (a.visits > 1) || b.measured - a.measured || a.lux - b.lux);
+  html += '<div class="tr-sec"><div class="tr-h">Dark places</div>';
+  html += dark.length
+    ? '<p class="tr-note" style="margin:0 0 8px">Stretches whose median measured 5 lux or less. Places measured more than once come first, then the longest.</p></div>'
+    : '<div class="tr-empty">None in this range.</div></div>';
+  dark.slice(0, shownCount.dark).forEach((p, r) => {
+    const i = trackerZones.push(p) - 1;
+    const extra = `About ${feet(p.span)} · <b>${visitsText(p)}</b> · ${Math.round(p.agree * 100)}% of it dark · ${dayRange(p.dates)}`
+      + (p.old ? ' · some from the older Android app' : '');
+    html += zoneHtml(p, i, r + 1, extra);
+  });
+  if (dark.length > shownCount.dark) html += `<button class="tr-more" data-more="dark">Show all ${dark.length}</button>`;
+
+  // Too bright.
+  const bright = places.filter(p => p.band === 'Too Bright').sort((a, b) => b.lux - a.lux);
+  if (bright.length) {
+    html += '<div class="tr-sec"><div class="tr-h">Too bright</div><p class="tr-note" style="margin:0 0 8px">Median above 150 lux, a working threshold for floodlights harsh enough to blind.</p></div>';
+    bright.slice(0, shownCount.bright).forEach((p, r) => {
+      const i = trackerZones.push(p) - 1;
+      html += zoneHtml(p, i, r + 1, `<b>${visitsText(p)}</b> · ${dayRange(p.dates)}`);
+    });
+    if (bright.length > shownCount.bright) html += `<button class="tr-more" data-more="bright">Show all ${bright.length}</button>`;
+  }
+
+  // Where measurements disagree: worth a second look before anyone cites them.
+  const mixed = cells.filter(c => c.spread >= 2)
+    .map(c => Object.assign(placeFrom([c], anchors), { visitLux: c.visitLux, spread: c.spread }))
+    .sort((a, b) => b.spread - a.spread || b.visits - a.visits);
+  if (mixed.length) {
+    html += '<div class="tr-sec"><div class="tr-h">Measurements disagree</div><p class="tr-note" style="margin:0 0 8px">Spots about 45 meters across where separate walks or readings landed two or more bands apart, say dark and adequate. Different phones, aim, passing cars or a light cycling on and off can each do it. Worth a second look before citing.</p></div>';
+    mixed.slice(0, shownCount.mixed).forEach((p, r) => {
+      const i = trackerZones.push(p) - 1;
+      const lo = Math.min(...p.visitLux), hi = Math.max(...p.visitLux);
+      html += zoneHtml(p, i, r + 1, `Visits ranged ${lux1(lo)} to ${lux1(hi)} lux · <b>${visitsText(p)}</b> · ${dayRange(p.dates)}`);
+    });
+    if (mixed.length > shownCount.mixed) html += `<button class="tr-more" data-more="mixed">Show all ${mixed.length}</button>`;
+  }
+
+  // What to keep in mind.
+  const oldN = state.allFeatures.filter(f => isOldAndroid(f.properties)).length
+    + new Set(state.walks.filter(f => isOldAndroid(f.properties)).map(f => f.properties.walkId)).size;
+  html += '<div class="tr-sec"><div class="tr-h">Reading this</div><p class="tr-note" style="margin:0">'
+    + 'Places are groups of measurements within about 45 meters of each other, named for the nearest address a reading recorded. '
+    + 'They show where people chose to measure, not every dark block in the city. '
+    + 'Lux comes from phone cameras and has not been checked against a calibrated meter. Android readings are adjusted to match the iPhone'
+    + (oldN ? `; ${oldN} measurement${oldN === 1 ? '' : 's'} here came from an older Android version that reads about half as high, so places that lean on them may look darker than they are.` : '.')
+    + ' The band filter above does not apply here; the app and time filters do.</p></div></div>';
+
+  el.innerHTML = html;
+  el.querySelectorAll('.zone').forEach(z => z.addEventListener('click', () => {
+    const p = trackerZones[Number(z.dataset.i)];
+    map.fitBounds(p.bounds, { padding: 120, maxZoom: 17, duration: 700 });
+  }));
+  el.querySelectorAll('.tr-more').forEach(b => b.addEventListener('click', () => {
+    shownCount[b.dataset.more] = 1e9;
+    renderTracker();
+  }));
+}
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  state.tab = btn.dataset.tab;
+  document.querySelectorAll('#tabs .tab-btn').forEach(t => t.classList.toggle('active', t === btn));
+  document.getElementById('tracker').hidden = state.tab !== 'tracker';
+  document.getElementById('list-wrap').hidden = state.tab !== 'list';
 });
 
 // Filter controls
